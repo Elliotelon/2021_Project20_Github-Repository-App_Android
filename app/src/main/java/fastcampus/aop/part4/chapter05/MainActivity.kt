@@ -1,107 +1,75 @@
 package fastcampus.aop.part4.chapter05
 
 import android.content.Intent
-import android.net.Uri
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import android.util.Log
-import android.widget.Toast
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.view.isGone
+import fastcampus.aop.part4.chapter05.data.database.DataBaseProvider
+import fastcampus.aop.part4.chapter05.data.entity.GithubRepoEntity
 import fastcampus.aop.part4.chapter05.databinding.ActivityMainBinding
-import fastcampus.aop.part4.chapter05.utillity.AuthTokenProvider
-import fastcampus.aop.part4.chapter05.utillity.RetrofitUtil
+import fastcampus.aop.part4.chapter05.view.RepositoryRecyclerAdapter
 import kotlinx.coroutines.*
 import kotlin.coroutines.CoroutineContext
 
 class MainActivity : AppCompatActivity(), CoroutineScope {
 
-    private lateinit var binding: ActivityMainBinding
-
     override val coroutineContext: CoroutineContext
         get() = Dispatchers.Main + Job()
 
-    private val authTokenProvider by lazy { AuthTokenProvider(this) }
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var adapter: RepositoryRecyclerAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        initAdapter()
         initViews()
     }
 
+    private fun initAdapter() {
+        adapter = RepositoryRecyclerAdapter()
+    }
+
     private fun initViews() = with(binding) {
-        loginButton.setOnClickListener {
-            loginGithub()
+        emptyResultTextView.isGone = true
+        recyclerView.adapter = adapter
+        searchButton.setOnClickListener {
+            startActivity(
+                Intent(this@MainActivity, SearchActivity::class.java)
+            )
         }
     }
 
-    private fun loginGithub() {
-        val loginUri = Uri.Builder().scheme("https").authority("github.com")
-            .appendPath("login")
-            .appendPath("oauth")
-            .appendPath("authorize")
-            .appendQueryParameter("client_id", BuildConfig.GITHUB_CLIENT_ID)
-            .build()
-
-        CustomTabsIntent.Builder().build().also {
-            it.launchUrl(this, loginUri)
+    override fun onResume() {
+        super.onResume()
+        launch(coroutineContext) {
+            loadSearchHistory()
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-
-        intent.data?.getQueryParameter("code")?.let { code ->
-            GlobalScope.launch {
-                showProgress()
-                val progressJob = getAccessToken(code)
-                progressJob.join()
-                dismissProgress()
-            }
-        }
-
-    }
-
-    private suspend fun showProgress() = GlobalScope.launch {
+    private suspend fun loadSearchHistory() = withContext(Dispatchers.IO) {
+        val histories = DataBaseProvider.provideDB(this@MainActivity).searchHistoryDao().getHistory()
         withContext(Dispatchers.Main) {
-            with(binding) {
-                loginButton.isGone = true
-                progressBar.isGone = false
-                progressTextView.isGone = false
-            }
+            setData(histories)
         }
     }
 
-    private fun getAccessToken(code: String) = launch(coroutineContext) {
-        try {
-            withContext(Dispatchers.IO) {
-                val response = RetrofitUtil.authApiService.getAccessToken(
-                    clientId = BuildConfig.GITHUB_CLIENT_ID,
-                    clientSecret = BuildConfig.GITHUB_CLIENT_SECRET,
-                    code = code
-                )
-                val accessToken = response.accessToken
-                Log.e("accessToken", accessToken)
-                if (accessToken.isNotEmpty()) {
-                    withContext(coroutineContext) {
-                        authTokenProvider.updateToken(accessToken)
+    private fun setData(githubRepoList: List<GithubRepoEntity>) = with(binding) {
+        if (githubRepoList.isEmpty()) {
+            emptyResultTextView.isGone = false
+            recyclerView.isGone = true
+        } else {
+            emptyResultTextView.isGone = true
+            recyclerView.isGone = false
+            adapter.setSearchResultList(githubRepoList) {
+                startActivity(
+                    Intent(this@MainActivity, RepositoryActivity::class.java).apply {
+                        putExtra(RepositoryActivity.REPOSITORY_OWNER_KEY, it.owner.login)
+                        putExtra(RepositoryActivity.REPOSITORY_NAME_KEY, it.name)
                     }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(this@MainActivity, "로그인 과정에서 에러가 발생했습니다. : ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun dismissProgress() = GlobalScope.launch {
-        withContext(Dispatchers.Main) {
-            with(binding) {
-                loginButton.isGone = false
-                progressBar.isGone = true
-                progressTextView.isGone = true
+                )
             }
         }
     }
